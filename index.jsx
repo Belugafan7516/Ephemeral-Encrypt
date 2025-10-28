@@ -30,10 +30,14 @@ import {
   Link as LinkIcon 
 } from 'lucide-react';
 
-// --- Firebase Configuration ---
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+// New:
+const appId = import.meta.env.VITE_APP_ID || 'default-app-id';
+// Parse the config string from environment variables
+const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG || '{}'); 
+// Note: The auth token (__initial_auth_token) isn't used in production outside of the Canvas environment, 
+// so we can omit it or leave it as null. The app will sign in anonymously instead.
+const initialAuthToken = null; 
+
 
 // --- Crypto Configuration ---
 const PBKDF2_ITERATIONS = 100000;
