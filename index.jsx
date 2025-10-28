@@ -30,14 +30,12 @@ import {
   Link as LinkIcon 
 } from 'lucide-react';
 
-// New:
+// --- Firebase Configuration (UPDATED FOR VERCEL/VITE) ---
+// We now read environment variables prefixed with VITE_
 const appId = import.meta.env.VITE_APP_ID || 'default-app-id';
-// Parse the config string from environment variables
 const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG || '{}'); 
-// Note: The auth token (__initial_auth_token) isn't used in production outside of the Canvas environment, 
-// so we can omit it or leave it as null. The app will sign in anonymously instead.
+// In a deployed environment, we sign in anonymously, so the custom token is set to null.
 const initialAuthToken = null; 
-
 
 // --- Crypto Configuration ---
 const PBKDF2_ITERATIONS = 100000;
@@ -187,7 +185,6 @@ const generateShareData = (shareId, password, encryptedData, location) => {
   const linkWithId = `${baseDomain}${location.pathname}?id=${shareId}`; 
   
   // Combine all Base64 cryptographic components (Ciphertext, Salt, IV)
-  // This is the literal "encrypted message" blob, separated by colons for compactness.
   const rawEncryptedMessage = `${encryptedData.ciphertext}:${encryptedData.salt}:${encryptedData.iv}`; 
   
   // Updated secureText format with the raw encrypted data
@@ -693,6 +690,13 @@ export default function App() {
   const [currentUserId, setCurrentUserId] = useState(null);
 
   useEffect(() => {
+    // Check if the configuration is available before attempting to initialize
+    if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
+      console.error("FIREBASE ERROR: Configuration is missing. Please set VITE_FIREBASE_CONFIG in your environment variables.");
+      // Render a static error or loading state until config is found
+      return; 
+    }
+    
     try {
       const app = initializeApp(firebaseConfig);
       const authInstance = getAuth(app);
@@ -729,8 +733,25 @@ export default function App() {
   }, []);
 
   if (!isAuthReady || !db) {
+    // If we're waiting for auth/db initialization, show loader.
     return <Loader text="Connecting to Secure Service..." />;
   }
+  
+  // Final check to handle missing config in deployed environment
+  if (Object.keys(firebaseConfig).length === 0) {
+      return (
+        <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white p-4">
+            <div className="bg-red-900 border border-red-700 p-6 rounded-lg max-w-sm text-center">
+                <AlertTriangle className="w-8 h-8 mx-auto mb-3 text-red-300"/>
+                <h2 className="text-xl font-bold mb-2">Configuration Error</h2>
+                <p className="text-sm">The application cannot start. Please ensure the 
+                <code className='bg-red-700/50 p-1 rounded-sm'>VITE_FIREBASE_CONFIG</code> 
+                environment variable is set correctly in Vercel.</p>
+            </div>
+        </div>
+      );
+  }
+
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans py-8">
