@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -30,12 +30,31 @@ import {
   Link as LinkIcon 
 } from 'lucide-react';
 
-// --- Firebase Configuration (UPDATED FOR VERCEL/VITE) ---
-// We now read environment variables prefixed with VITE_
-const appId = import.meta.env.VITE_APP_ID || 'default-app-id';
-const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG || '{}'); 
-// In a deployed environment, we sign in anonymously, so the custom token is set to null.
-const initialAuthToken = null; 
+// Tailwind CSS is assumed to be configured in your Vercel/Vite environment
+
+// --- Firebase Configuration (Prioritizes Canvas Globals, falls back to Vercel/Vite Environment Variables) ---
+
+// Check for the Canvas environment based on the presence of the global __app_id
+const isCanvas = typeof __app_id !== 'undefined';
+
+let rawAppId, rawFirebaseConfig, rawAuthToken;
+
+if (isCanvas) {
+  // 1. Canvas Environment (uses globals)
+  rawAppId = __app_id;
+  rawFirebaseConfig = __firebase_config;
+  rawAuthToken = __initial_auth_token;
+} else {
+  // 2. Vercel/Vite Environment (uses import.meta.env)
+  const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
+  rawAppId = env.VITE_APP_ID || 'default-app-id';
+  rawFirebaseConfig = env.VITE_FIREBASE_CONFIG || '{}';
+  rawAuthToken = null; // No custom token in Vercel deployment
+}
+
+const appId = rawAppId;
+const firebaseConfig = JSON.parse(rawFirebaseConfig); 
+const initialAuthToken = rawAuthToken;
 
 // --- Crypto Configuration ---
 const PBKDF2_ITERATIONS = 100000;
@@ -178,16 +197,15 @@ const helpers = {
   }
 };
 
-const generateShareData = (shareId, password, encryptedData, location) => {
+const generateShareData = (shareId, password, encryptedData) => {
   // Hardcoded domain for direct link as requested by the user
-  const baseDomain = "https://encrypt.eugeneevons.com";
-  // Use the current path but override the domain
-  const linkWithId = `${baseDomain}${location.pathname}?id=${shareId}`; 
+  const baseDomain = "https://encrypt.eugeneevons.com"; 
+  // We use a dummy pathname for deployed context
+  const linkWithId = `${baseDomain}/?id=${shareId}`; 
   
   // Combine all Base64 cryptographic components (Ciphertext, Salt, IV)
   const rawEncryptedMessage = `${encryptedData.ciphertext}:${encryptedData.salt}:${encryptedData.iv}`; 
   
-  // Updated secureText format with the raw encrypted data
   const secureText = `Hi! I wanna share you an encrypted message. 
 
 Access code: ${password}
@@ -227,7 +245,7 @@ const MarkdownEditor = ({ content, onChange, readOnly = false }) => {
     );
 };
 
-// --- Main App Logic and Components ---
+// --- Helper Components ---
 
 const Loader = ({ text }) => (
   <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white">
@@ -248,7 +266,8 @@ function useCopyToClipboard() {
       document.body.appendChild(textArea);
       textArea.focus();
       textArea.select();
-      document.execCommand('copy');
+      // Fallback for secure copy within iframes/browsers
+      document.execCommand('copy'); 
       
       document.body.removeChild(textArea);
       
@@ -263,7 +282,9 @@ function useCopyToClipboard() {
 }
 
 
-const EphemeralEncryptApp = ({ db, currentUserId }) => {
+// --- Main Application Component ---
+
+const CoreApp = ({ db, currentUserId }) => {
   const [view, setView] = useState('send');
 
   // Create Secret States
@@ -289,7 +310,7 @@ const EphemeralEncryptApp = ({ db, currentUserId }) => {
 
   const collectionPath = useMemo(() => `/artifacts/${appId}/public/data/ephemeral_secrets_v2`, []);
   
-  // Read URL parameters on load
+  // Read URL parameters on load for deployed/local access
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const id = params.get('id');
@@ -344,11 +365,11 @@ const EphemeralEncryptApp = ({ db, currentUserId }) => {
         creatorId: currentUserId,
       });
       
-      const shareData = generateShareData(shareId, sendPassword, encryptedData, window.location);
+      const shareData = generateShareData(shareId, sendPassword, encryptedData);
 
       setStatus({ 
         type: 'success', 
-        message: shareId, // Store the Share ID here temporarily
+        message: shareId, 
         code: sendPassword,
         shareData: shareData
       });
@@ -702,6 +723,12 @@ export default function App() {
       const authInstance = getAuth(app);
       const dbInstance = getFirestore(app);
       
+      // We explicitly check for measurementId since it might cause issues if analytics are loaded improperly
+      if (firebaseConfig.measurementId) {
+          // Do not initialize getAnalytics here, as it requires a valid measurementId in a specific environment
+          console.log("Analytics ID found, but skipping initialization in this component for safety.");
+      }
+
       setLogLevel('debug');
       setDb(dbInstance);
       setAuth(authInstance);
@@ -712,6 +739,7 @@ export default function App() {
           setCurrentUserId(user.uid);
         } else {
           try {
+            // In a deployed Vercel environment, initialAuthToken is null, leading to anonymous sign-in
             if (initialAuthToken) {
               const credentials = await signInWithCustomToken(authInstance, initialAuthToken);
               setCurrentUserId(credentials.user.uid);
@@ -755,8 +783,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans py-8">
-      <EphemeralEncryptApp db={db} currentUserId={currentUserId} />
+      <CoreApp db={db} currentUserId={currentUserId} />
     </div>
   );
 }
-
