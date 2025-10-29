@@ -32,29 +32,29 @@ import {
 
 // Tailwind CSS is assumed to be configured in your Vercel/Vite environment
 
-// --- Firebase Configuration (Prioritizes Canvas Globals, falls back to Vercel/Vite Environment Variables) ---
+// --- Firebase Configuration (Safely loads from Canvas Globals) ---
 
-// Check for the Canvas environment based on the presence of the global __app_id
-const isCanvas = typeof __app_id !== 'undefined';
+// Helper functions to safely access globals without causing compilation warnings
+const getAppId = () => typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const getFirebaseConfig = () => {
+    try {
+        if (typeof __firebase_config !== 'undefined' && __firebase_config.trim() !== '') {
+            return JSON.parse(__firebase_config);
+        }
+    } catch (e) {
+        console.error("Failed to parse Canvas firebase config:", e);
+    }
+    // Fallback: When deployed on Vercel, the app must load config via the standard Vite/React process.
+    // For this environment, we return an empty object, forcing the error message to prompt the user
+    // to check their VERCEL Environment variables (VITE_FIREBASE_CONFIG and VITE_APP_ID).
+    return {};
+};
+const getInitialAuthToken = () => typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-let rawAppId, rawFirebaseConfig, rawAuthToken;
 
-if (isCanvas) {
-  // 1. Canvas Environment (uses globals)
-  rawAppId = __app_id;
-  rawFirebaseConfig = __firebase_config;
-  rawAuthToken = __initial_auth_token;
-} else {
-  // 2. Vercel/Vite Environment (uses import.meta.env)
-  const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
-  rawAppId = env.VITE_APP_ID || 'default-app-id';
-  rawFirebaseConfig = env.VITE_FIREBASE_CONFIG || '{}';
-  rawAuthToken = null; // No custom token in Vercel deployment
-}
-
-const appId = rawAppId;
-const firebaseConfig = JSON.parse(rawFirebaseConfig); 
-const initialAuthToken = rawAuthToken;
+const appId = getAppId();
+const firebaseConfig = getFirebaseConfig(); 
+const initialAuthToken = getInitialAuthToken();
 
 // --- Crypto Configuration ---
 const PBKDF2_ITERATIONS = 100000;
@@ -709,12 +709,15 @@ export default function App() {
   const [auth, setAuth] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [currentUserId, setCurrentUserId] = useState(null);
+  const [isVercelConfigMissing, setIsVercelConfigMissing] = useState(false);
+
 
   useEffect(() => {
     // Check if the configuration is available before attempting to initialize
-    if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-      console.error("FIREBASE ERROR: Configuration is missing. Please set VITE_FIREBASE_CONFIG in your environment variables.");
-      // Render a static error or loading state until config is found
+    if (Object.keys(firebaseConfig).length === 0) {
+      // We are likely on Vercel and the environment variable VITE_FIREBASE_CONFIG is missing 
+      // or not accessible in this context.
+      setIsVercelConfigMissing(true);
       return; 
     }
     
@@ -723,12 +726,6 @@ export default function App() {
       const authInstance = getAuth(app);
       const dbInstance = getFirestore(app);
       
-      // We explicitly check for measurementId since it might cause issues if analytics are loaded improperly
-      if (firebaseConfig.measurementId) {
-          // Do not initialize getAnalytics here, as it requires a valid measurementId in a specific environment
-          console.log("Analytics ID found, but skipping initialization in this component for safety.");
-      }
-
       setLogLevel('debug');
       setDb(dbInstance);
       setAuth(authInstance);
@@ -739,7 +736,7 @@ export default function App() {
           setCurrentUserId(user.uid);
         } else {
           try {
-            // In a deployed Vercel environment, initialAuthToken is null, leading to anonymous sign-in
+            // Sign in using custom token (Canvas) or anonymously (Vercel)
             if (initialAuthToken) {
               const credentials = await signInWithCustomToken(authInstance, initialAuthToken);
               setCurrentUserId(credentials.user.uid);
@@ -760,27 +757,30 @@ export default function App() {
     }
   }, []);
 
-  if (!isAuthReady || !db) {
-    // If we're waiting for auth/db initialization, show loader.
-    return <Loader text="Connecting to Secure Service..." />;
-  }
-  
-  // Final check to handle missing config in deployed environment
-  if (Object.keys(firebaseConfig).length === 0) {
+  if (isVercelConfigMissing) {
       return (
         <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white p-4">
             <div className="bg-red-900 border border-red-700 p-6 rounded-lg max-w-sm text-center">
                 <AlertTriangle className="w-8 h-8 mx-auto mb-3 text-red-300"/>
                 <h2 className="text-xl font-bold mb-2">Configuration Error</h2>
-                <p className="text-sm">The application cannot start. Please ensure the 
-                <code className='bg-red-700/50 p-1 rounded-sm'>VITE_FIREBASE_CONFIG</code> 
-                environment variable is set correctly in Vercel.</p>
+                <p className="text-sm mb-4">
+                    The app could not load Firebase config. 
+                    If deploying on Vercel, please ensure the environment variable 
+                    <code className='bg-red-700/50 p-1 rounded-sm text-xs mx-1'>VITE_FIREBASE_CONFIG</code> 
+                    is set correctly with the full JSON string.
+                </p>
+                <p className="text-xs text-red-300">
+                    This error will not appear in the Canvas editor environment.
+                </p>
             </div>
         </div>
       );
   }
 
-
+  if (!isAuthReady || !db) {
+    return <Loader text="Connecting to Secure Service..." />;
+  }
+  
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans py-8">
       <CoreApp db={db} currentUserId={currentUserId} />
