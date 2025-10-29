@@ -28,8 +28,7 @@ import {
 
 // --- Firebase Configuration ---
 // These global variables are provided by the environment when running in Canvas.
-// For Vercel deployment, the code relies on App.jsx being the main file 
-// (though Vercel variables are accessed differently, this ensures Canvas compatibility).
+// We use a fallback to ensure it works on Vercel where you will set environment variables.
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -87,22 +86,6 @@ const MessageItem = ({ message, onVerify, verificationStatus }) => {
 
   const status = verificationStatus?.id === message.id ? verificationStatus.status : null;
 
-  const handleCopy = (text) => {
-    // A fallback for document.execCommand
-    try {
-      const textArea = document.createElement("textarea");
-      textArea.value = text;
-      document.body.appendChild(textArea);
-      textArea.focus();
-      textArea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textArea);
-    } catch (err) {
-      console.error('Failed to copy text: ', err);
-    }
-  };
-  
-  // Adjusted handleCopy to use document.execCommand for better iframe compatibility
   const handleCopyKey = (text) => {
       try {
         const tempElement = document.createElement('textarea');
@@ -165,7 +148,6 @@ const MessageItem = ({ message, onVerify, verificationStatus }) => {
         
         {showDetails && (
           <div className="mt-4 space-y-4">
-            {/* Using handleCopyKey for better iframe compatibility */}
             <KeyDisplay label="Public Key (Base64)" value={message.publicKey} onCopy={handleCopyKey} />
             <KeyDisplay label="Signature (Base64)" value={message.signature} onCopy={handleCopyKey} />
           </div>
@@ -214,6 +196,7 @@ const MainApplication = ({ db, userId }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
   const [verificationStatus, setVerificationStatus] = useState({ id: null, status: null }); // { id: 'msgId', status: 'valid' | 'invalid' | 'checking' }
+  const [postWarning, setPostWarning] = useState(null); // NEW: For showing warnings instead of alert()
 
   // Firestore Collection Path
   const collectionPath = useMemo(() => `/artifacts/${appId}/public/data/signed_messages`, []);
@@ -246,6 +229,7 @@ const MainApplication = ({ db, userId }) => {
 
   const handleGenerateKeys = async () => {
     setIsLoading(true);
+    setPostWarning(null); // Clear warnings when generating new keys
     try {
       const newKeyPair = await window.crypto.subtle.generateKey(
         keyGenParams,
@@ -262,18 +246,25 @@ const MainApplication = ({ db, userId }) => {
 
     } catch (err) {
       console.error("Key generation failed:", err);
+      setPostWarning('Key generation failed. Your browser may not support the necessary crypto features.');
+      setTimeout(() => setPostWarning(null), 5000);
     }
     setIsLoading(false);
   };
 
   const handleSignAndPost = async () => {
     if (!newMessage || !keyPair) {
-      // Replaced alert with console message/validation display
-      console.warn("Validation failed: Please generate keys and write a message first.");
+      // FIX: Replaced illegal alert() with a visual warning
+      const message = !keyPair 
+        ? "Please generate a key pair first (Step 1)." 
+        : "Please enter a message to sign.";
+      setPostWarning(message);
+      setTimeout(() => setPostWarning(null), 4000);
       return;
     }
     
     setIsPosting(true);
+    setPostWarning(null); // Clear warnings before posting
     try {
       const messageBuffer = str2ab(newMessage);
       
@@ -298,6 +289,8 @@ const MainApplication = ({ db, userId }) => {
       
     } catch (err) {
       console.error("Failed to sign and post message:", err);
+      setPostWarning('Failed to sign or post message. Check console for details.');
+      setTimeout(() => setPostWarning(null), 5000);
     }
     setIsPosting(false);
   };
@@ -375,7 +368,6 @@ const MainApplication = ({ db, userId }) => {
               {isLoading ? 'Generating...' : 'Generate New Key Pair'}
             </button>
             <div className="mt-4 space-y-3">
-              {/* Note: navigator.clipboard.writeText is replaced by a safer helper in MessageItem */}
               <KeyDisplay label="Your Public Key (Base64)" value={publicKeyB64} onCopy={(val) => { 
                   try { document.execCommand('copy'); } catch(e) { console.error('Copy failed', e) }
               }} />
@@ -391,6 +383,13 @@ const MainApplication = ({ db, userId }) => {
               <PenSquare className="w-6 h-6 mr-3 text-cyan-400" />
               2. Sign & Post
             </h2>
+            {/* NEW: Warning Message for Post/Sign Failure */}
+            {postWarning && (
+              <div className="p-3 bg-red-800 text-white rounded-md mb-4 flex items-center">
+                <XCircle className="w-5 h-5 mr-2" />
+                <span className="font-medium text-sm">{postWarning}</span>
+              </div>
+            )}
             <textarea
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
@@ -448,14 +447,17 @@ export default function App() {
   const [auth, setAuth] = useState(null);
   const [userId, setUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [initError, setInitError] = useState(null); // NEW: State for showing initialization errors
 
   useEffect(() => {
     // Initialize Firebase
     try {
       // Check if firebaseConfig is populated. If not, we can't initialize.
       if (Object.keys(firebaseConfig).length === 0) {
-        console.error("Firebase config is empty. Cannot initialize.");
-        setIsAuthReady(true); // Stop trying to connect, but show UI (or a warning)
+        const errorMsg = "Firebase configuration is missing or empty. Please ensure your Vercel environment variables are set correctly.";
+        console.error(errorMsg);
+        setInitError(errorMsg);
+        setIsAuthReady(true); // Stop trying to connect, but show UI error
         return;
       }
       
@@ -485,8 +487,10 @@ export default function App() {
             }
             // The onAuthStateChanged listener will fire again once signed in
           } catch (authError) {
-            console.error("Anonymous sign-in failed: ", authError);
-            setIsAuthReady(false); // Auth failed
+            const errorMsg = `Authentication failed: ${authError.message}`;
+            console.error(errorMsg);
+            setInitError(errorMsg);
+            setIsAuthReady(true); // Stop loading and show error
           }
         }
       });
@@ -494,11 +498,32 @@ export default function App() {
       return () => unsubscribe(); // Cleanup listener on unmount
       
     } catch (e) {
-      console.error("Firebase initialization error:", e);
-      setIsAuthReady(false); // Init failed
+      const errorMsg = `A critical error occurred during Firebase initialization: ${e.message}`;
+      console.error(errorMsg, e);
+      setInitError(errorMsg);
+      setIsAuthReady(true); // Allow render to show error message
     }
   }, []);
 
+  // Show a permanent error screen if initialization failed
+  if (initError) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-900 p-8">
+        <div className="bg-red-800 p-6 rounded-lg shadow-xl text-white max-w-md">
+          <h2 className="text-xl font-bold mb-3 flex items-center">
+            <XCircle className="w-6 h-6 mr-2" />
+            Application Initialization Error
+          </h2>
+          <p className="text-sm">{initError}</p>
+          <p className="mt-3 text-xs text-gray-200">
+            Please check your project setup and ensure all environment variables are correctly configured.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  
+  // Show loading screen while waiting for auth
   if (!isAuthReady || !db || !userId) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900 text-white">
@@ -508,6 +533,7 @@ export default function App() {
     );
   }
 
+  // Show main application
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans">
       <MainApplication db={db} userId={userId} />
