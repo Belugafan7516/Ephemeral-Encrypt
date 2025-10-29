@@ -23,12 +23,11 @@ import {
   PenSquare, 
   History, 
   User,
-  Copy
+  Copy,
+  AlertTriangle
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
-// These global variables are provided by the environment when running in Canvas.
-// We use a fallback to ensure it works on Vercel where you will set environment variables.
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -74,6 +73,57 @@ function str2ab(str) {
 // --- React Components ---
 
 /**
+ * KeyDisplay Component - Updated to handle copy internally.
+ */
+const KeyDisplay = ({ label, value }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    if (!value) return;
+    try {
+      const tempElement = document.createElement('textarea');
+      tempElement.value = value;
+      document.body.appendChild(tempElement);
+      tempElement.select();
+      document.execCommand('copy');
+      document.body.removeChild(tempElement);
+      
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy text using execCommand: ', err);
+      // In a production app, we would show a custom modal here.
+    }
+  };
+  
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-1">
+        <label className="text-xs font-semibold text-gray-400">{label}</label>
+        <button 
+          onClick={handleCopy} 
+          title={copied ? "Copied!" : "Copy to Clipboard"} 
+          className="text-gray-500 hover:text-white flex items-center"
+        >
+          {copied ? (
+            <CheckCircle className="w-3 h-3 text-green-400" />
+          ) : (
+            <Copy className="w-3 h-3" />
+          )}
+        </button>
+      </div>
+      <textarea
+        readOnly
+        value={value}
+        rows="3"
+        className="w-full p-2 bg-gray-900 text-gray-300 font-mono text-xs rounded-md border border-gray-700 resize-none"
+      />
+    </div>
+  );
+};
+
+
+/**
  * MessageItem Component
  * Renders a single signed message from the ledger.
  */
@@ -86,20 +136,6 @@ const MessageItem = ({ message, onVerify, verificationStatus }) => {
 
   const status = verificationStatus?.id === message.id ? verificationStatus.status : null;
 
-  const handleCopyKey = (text) => {
-      try {
-        const tempElement = document.createElement('textarea');
-        tempElement.value = text;
-        document.body.appendChild(tempElement);
-        tempElement.select();
-        document.execCommand('copy');
-        document.body.removeChild(tempElement);
-      } catch (err) {
-        console.error('Failed to copy text using execCommand: ', err);
-      }
-  };
-
-  
   return (
     <div className="bg-gray-800 rounded-lg shadow-md transition-all duration-300">
       <div className="p-4 border-b border-gray-700">
@@ -148,8 +184,9 @@ const MessageItem = ({ message, onVerify, verificationStatus }) => {
         
         {showDetails && (
           <div className="mt-4 space-y-4">
-            <KeyDisplay label="Public Key (Base64)" value={message.publicKey} onCopy={handleCopyKey} />
-            <KeyDisplay label="Signature (Base64)" value={message.signature} onCopy={handleCopyKey} />
+            {/* Using updated KeyDisplay without onCopy prop */}
+            <KeyDisplay label="Public Key (Base64)" value={message.publicKey} />
+            <KeyDisplay label="Signature (Base64)" value={message.signature} />
           </div>
         )}
       </div>
@@ -158,31 +195,13 @@ const MessageItem = ({ message, onVerify, verificationStatus }) => {
 };
 
 /**
- * KeyDisplay Component
- * A small helper to show cryptographic keys/signatures.
- */
-const KeyDisplay = ({ label, value, onCopy }) => (
-  <div>
-    <div className="flex justify-between items-center mb-1">
-      <label className="text-xs font-semibold text-gray-400">{label}</label>
-      <button onClick={() => onCopy(value)} title="Copy" className="text-gray-500 hover:text-white">
-        <Copy className="w-3 h-3" />
-      </button>
-    </div>
-    <textarea
-      readOnly
-      value={value}
-      rows="3"
-      className="w-full p-2 bg-gray-900 text-gray-300 font-mono text-xs rounded-md border border-gray-700 resize-none"
-    />
-  </div>
-);
-
-/**
  * MainApplication Component
  * The core app UI shown after successful authentication.
  */
 const MainApplication = ({ db, userId }) => {
+  // Check for Crypto Support
+  const isCryptoSupported = useMemo(() => typeof window.crypto?.subtle !== 'undefined', []);
+
   // App State
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
@@ -195,8 +214,8 @@ const MainApplication = ({ db, userId }) => {
   // UI State
   const [isLoading, setIsLoading] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
-  const [verificationStatus, setVerificationStatus] = useState({ id: null, status: null }); // { id: 'msgId', status: 'valid' | 'invalid' | 'checking' }
-  const [postWarning, setPostWarning] = useState(null); // NEW: For showing warnings instead of alert()
+  const [verificationStatus, setVerificationStatus] = useState({ id: null, status: null });
+  const [postWarning, setPostWarning] = useState(null);
 
   // Firestore Collection Path
   const collectionPath = useMemo(() => `/artifacts/${appId}/public/data/signed_messages`, []);
@@ -228,8 +247,14 @@ const MainApplication = ({ db, userId }) => {
   // --- Crypto Handlers ---
 
   const handleGenerateKeys = async () => {
+    if (!isCryptoSupported) {
+        setPostWarning('Web Crypto API not supported in this browser environment.');
+        setTimeout(() => setPostWarning(null), 5000);
+        return;
+    }
+
     setIsLoading(true);
-    setPostWarning(null); // Clear warnings when generating new keys
+    setPostWarning(null);
     try {
       const newKeyPair = await window.crypto.subtle.generateKey(
         keyGenParams,
@@ -246,7 +271,7 @@ const MainApplication = ({ db, userId }) => {
 
     } catch (err) {
       console.error("Key generation failed:", err);
-      setPostWarning('Key generation failed. Your browser may not support the necessary crypto features.');
+      setPostWarning('Key generation failed. Check console for details.');
       setTimeout(() => setPostWarning(null), 5000);
     }
     setIsLoading(false);
@@ -254,7 +279,6 @@ const MainApplication = ({ db, userId }) => {
 
   const handleSignAndPost = async () => {
     if (!newMessage || !keyPair) {
-      // FIX: Replaced illegal alert() with a visual warning
       const message = !keyPair 
         ? "Please generate a key pair first (Step 1)." 
         : "Please enter a message to sign.";
@@ -264,7 +288,7 @@ const MainApplication = ({ db, userId }) => {
     }
     
     setIsPosting(true);
-    setPostWarning(null); // Clear warnings before posting
+    setPostWarning(null); 
     try {
       const messageBuffer = str2ab(newMessage);
       
@@ -285,7 +309,7 @@ const MainApplication = ({ db, userId }) => {
         timestamp: serverTimestamp()
       });
       
-      setNewMessage(''); // Clear input on success
+      setNewMessage('');
       
     } catch (err) {
       console.error("Failed to sign and post message:", err);
@@ -296,6 +320,11 @@ const MainApplication = ({ db, userId }) => {
   };
   
   const handleVerify = async (messageDoc) => {
+    if (!isCryptoSupported) {
+        setVerificationStatus({ id: messageDoc.id, status: 'invalid' });
+        return;
+    }
+    
     setVerificationStatus({ id: messageDoc.id, status: 'checking' });
     
     try {
@@ -330,6 +359,22 @@ const MainApplication = ({ db, userId }) => {
       setVerificationStatus({ id: messageDoc.id, status: 'invalid' });
     }
   };
+
+  if (!isCryptoSupported) {
+      return (
+          <div className="flex items-center justify-center h-screen bg-gray-900 p-8">
+              <div className="bg-yellow-800 p-6 rounded-lg shadow-xl text-white max-w-md">
+                  <h2 className="text-xl font-bold mb-3 flex items-center">
+                      <AlertTriangle className="w-6 h-6 mr-2" />
+                      Crypto API Not Supported
+                  </h2>
+                  <p className="text-sm">
+                      This application requires the **Web Crypto API** for key generation and digital signing, but it is not available or supported in your current browser environment.
+                  </p>
+              </div>
+          </div>
+      );
+  }
 
   return (
     <div className="w-full max-w-7xl mx-auto p-4 md:p-6 space-y-6">
@@ -368,12 +413,9 @@ const MainApplication = ({ db, userId }) => {
               {isLoading ? 'Generating...' : 'Generate New Key Pair'}
             </button>
             <div className="mt-4 space-y-3">
-              <KeyDisplay label="Your Public Key (Base64)" value={publicKeyB64} onCopy={(val) => { 
-                  try { document.execCommand('copy'); } catch(e) { console.error('Copy failed', e) }
-              }} />
-              <KeyDisplay label="Your Private Key (Base64)" value={privateKeyB64} onCopy={(val) => { 
-                  try { document.execCommand('copy'); } catch(e) { console.error('Copy failed', e) }
-              }} />
+              {/* Using updated KeyDisplay without onCopy prop */}
+              <KeyDisplay label="Your Public Key (Base64)" value={publicKeyB64} />
+              <KeyDisplay label="Your Private Key (Base64)" value={privateKeyB64} />
             </div>
           </div>
 
@@ -383,7 +425,6 @@ const MainApplication = ({ db, userId }) => {
               <PenSquare className="w-6 h-6 mr-3 text-cyan-400" />
               2. Sign & Post
             </h2>
-            {/* NEW: Warning Message for Post/Sign Failure */}
             {postWarning && (
               <div className="p-3 bg-red-800 text-white rounded-md mb-4 flex items-center">
                 <XCircle className="w-5 h-5 mr-2" />
@@ -447,17 +488,15 @@ export default function App() {
   const [auth, setAuth] = useState(null);
   const [userId, setUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [initError, setInitError] = useState(null); // NEW: State for showing initialization errors
+  const [initError, setInitError] = useState(null);
 
   useEffect(() => {
-    // Initialize Firebase
     try {
-      // Check if firebaseConfig is populated. If not, we can't initialize.
       if (Object.keys(firebaseConfig).length === 0) {
-        const errorMsg = "Firebase configuration is missing or empty. Please ensure your Vercel environment variables are set correctly.";
+        const errorMsg = "Firebase configuration is missing or empty. Cannot initialize application.";
         console.error(errorMsg);
         setInitError(errorMsg);
-        setIsAuthReady(true); // Stop trying to connect, but show UI error
+        setIsAuthReady(true);
         return;
       }
       
@@ -465,47 +504,41 @@ export default function App() {
       const authInstance = getAuth(app);
       const dbInstance = getFirestore(app);
       
-      // Enable debug logging for Firestore
       setLogLevel('debug');
 
       setDb(dbInstance);
       setAuth(authInstance);
 
-      // Set up auth state listener
       const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
         if (user) {
-          // User is signed in
           setUserId(user.uid);
           setIsAuthReady(true);
         } else {
-          // User is signed out, attempt to sign in
           try {
             if (initialAuthToken) {
               await signInWithCustomToken(authInstance, initialAuthToken);
             } else {
               await signInAnonymously(authInstance);
             }
-            // The onAuthStateChanged listener will fire again once signed in
           } catch (authError) {
-            const errorMsg = `Authentication failed: ${authError.message}`;
+            const errorMsg = `Authentication failed: ${authError.message}.`;
             console.error(errorMsg);
             setInitError(errorMsg);
-            setIsAuthReady(true); // Stop loading and show error
+            setIsAuthReady(true);
           }
         }
       });
       
-      return () => unsubscribe(); // Cleanup listener on unmount
+      return () => unsubscribe();
       
     } catch (e) {
       const errorMsg = `A critical error occurred during Firebase initialization: ${e.message}`;
       console.error(errorMsg, e);
       setInitError(errorMsg);
-      setIsAuthReady(true); // Allow render to show error message
+      setIsAuthReady(true);
     }
   }, []);
 
-  // Show a permanent error screen if initialization failed
   if (initError) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900 p-8">
@@ -516,14 +549,13 @@ export default function App() {
           </h2>
           <p className="text-sm">{initError}</p>
           <p className="mt-3 text-xs text-gray-200">
-            Please check your project setup and ensure all environment variables are correctly configured.
+            Please check your console for detailed error messages related to Firebase configuration or authentication.
           </p>
         </div>
       </div>
     );
   }
   
-  // Show loading screen while waiting for auth
   if (!isAuthReady || !db || !userId) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900 text-white">
@@ -533,7 +565,6 @@ export default function App() {
     );
   }
 
-  // Show main application
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans">
       <MainApplication db={db} userId={userId} />
